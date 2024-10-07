@@ -1,4 +1,4 @@
-# Point-to-Point Distance Oracle on Terrain Surface
+# Trip Planning on Terrain Surface
 
 The main source code is main.cpp. 
 
@@ -30,7 +30,7 @@ main small_terrain.off 8
 
 In this example, samll_terrain.off is the terrain data file and 8 is the separation factor and the error bound e is equal to 0.25.
 
-The program assumes that there is a poilist.txt file under the same folder. poilist.txt contains the information of the POIs to be indexed.
+The program assumes that there is a poilist.txt file under the same folder. poilist.txt contains the information of the POIs to be indexed. The first POI in the list will be the source point s and the last POI in the list will be the destination and other POIs in the list will be all included in P. 
 
 The format of the poilist.txt: 
 
@@ -38,9 +38,4 @@ the number of POIs
 
 "the ID of the 1st POI in the terrain data" "the ID of the 2nd POI in the terrain data" ...... 
 
-# Experimental Result
-
-The program will save result in a file "SE.txt". 
-
-The result contains "error bound" "# of POIs" "preprocessing time (seconds)" "query time (micor seconds)" "space (MB)" "error". 
 
