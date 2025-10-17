@@ -1,4 +1,4 @@
-# Trip Planning on Terrain Surface
+# Constrained Shortest Path on Terrain Surface
 
 The main source code is main.cpp. 
 
