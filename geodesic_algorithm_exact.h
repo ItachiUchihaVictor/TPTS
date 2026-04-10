@@ -84,6 +84,8 @@ public:
    				   double max_propagation_distance = GEODESIC_INF,			//propagation algorithm stops after reaching the certain distance from the source
 				   std::vector<SurfacePoint>* stop_points = NULL, int k=10000000); //or after ensuring that all the stop_points are covered
 
+	void propagate_GB(std::vector<SurfacePoint>& sources,
+				   std::vector<SurfacePoint>* stop_points = NULL); //or after ensuring that all the stop_points are covered
 	bool range(std::vector<SurfacePoint>& sources,
 				   double max_propagation_distance = GEODESIC_INF,
                    GeoNode* geonode=NULL);
@@ -101,6 +103,10 @@ private:
 	void update_list_and_queue(list_pointer list,
 							   IntervalWithStop* candidates,	//up to two candidates
 							   unsigned num_candidates);
+	void update_list_and_queue_GB(list_pointer list,
+							   IntervalWithStop* candidates,	//up to two candidates
+							   unsigned num_candidates,
+                               SurfacePoint stop);
 
 	unsigned compute_propagated_parameters(double pseudo_x, 
 											double pseudo_y, 
@@ -746,6 +752,156 @@ inline bool GeodesicAlgorithmExact::range(std::vector<SurfacePoint>& sources,
     if(geonode)geonode->setparent(parent);
     return chain;
 }
+inline void GeodesicAlgorithmExact::propagate_GB(std::vector<SurfacePoint>& sources,
+									   std::vector<SurfacePoint>* stop_points
+                                       )
+{
+	set_stop_conditions(stop_points, 0);
+	set_sources(sources);
+	initialize_propagation_data();
+    SurfacePoint pstop = (*stop_points)[0];
+	clock_t start = clock();
+
+	unsigned satisfied_index = 0;
+
+	m_iterations = 0;		//for statistics
+	m_queue_max_size = 0;
+
+	IntervalWithStop candidates[2];
+
+	while(!m_queue.empty())
+	{
+		m_queue_max_size = std::max(m_queue.size(), m_queue_max_size);
+
+		unsigned const check_period = 10;
+    	if(++m_iterations % check_period == 0)		//check if we covered all required vertices
+		{
+			if (check_stop_conditions(satisfied_index))
+			{
+				break;
+			}
+		}
+
+		interval_pointer min_interval = *m_queue.begin();
+		m_queue.erase(m_queue.begin());
+		edge_pointer edge = min_interval->edge();
+		//list_pointer list = interval_list(edge); -Wunused-variable
+
+		assert(min_interval->d() < GEODESIC_INF);
+
+		bool const first_interval = min_interval->start() == 0.0;
+		//bool const last_interval = min_interval->stop() == edge->length();
+		bool const last_interval = min_interval->next() == NULL;
+
+		bool const turn_left = edge->v0()->saddle_or_boundary();
+		bool const turn_right = edge->v1()->saddle_or_boundary();
+
+		for(unsigned i=0; i<edge->adjacent_faces().size(); ++i)		//two possible faces to propagate
+		{
+			if(!edge->is_boundary())		//just in case, always propagate boundary edges
+			{
+				if((i == 0 && min_interval->direction() == Interval::FROM_FACE_0) ||
+					(i == 1 && min_interval->direction() == Interval::FROM_FACE_1))
+				{
+					continue;
+				}
+			}
+
+			face_pointer face = edge->adjacent_faces()[i];			//if we come from 1, go to 2
+			edge_pointer next_edge = face->next_edge(edge,edge->v0());
+
+			unsigned num_propagated = compute_propagated_parameters(min_interval->pseudo_x(), 
+																	 min_interval->pseudo_y(), 
+																	 min_interval->d(),		//parameters of the interval
+																	 min_interval->start(), 
+																	 min_interval->stop(),		//start/end of the interval
+																	 face->vertex_angle(edge->v0()),	//corner angle
+																	 next_edge->length(),		//length of the new edge
+																	 first_interval,		//if it is the first interval on the edge
+																	 last_interval,
+																	 turn_left,
+																	 turn_right,
+																	 candidates);		//if it is the last interval on the edge
+			bool propagate_to_right = true;
+
+			if(num_propagated)
+			{
+				if(candidates[num_propagated-1].stop() != next_edge->length()) 
+				{
+					propagate_to_right = false;
+				}
+				
+				bool const invert = next_edge->v0()->id() != edge->v0()->id(); //if the origins coinside, do not invert intervals
+
+				construct_propagated_intervals(invert,		//do not inverse 
+											 next_edge, 
+											 face,
+											 candidates,
+											 num_propagated,
+											 min_interval);
+				
+				update_list_and_queue_GB(interval_list(next_edge), 
+									  candidates, 
+									  num_propagated,
+                                      pstop);
+			}
+
+			if(propagate_to_right)
+			{
+									//propogation to the right edge
+				double length = edge->length();
+				next_edge = face->next_edge(edge,edge->v1());
+
+				num_propagated = compute_propagated_parameters(length - min_interval->pseudo_x(), 
+															 min_interval->pseudo_y(), 
+															 min_interval->d(),		//parameters of the interval
+															 length - min_interval->stop(), 
+															 length - min_interval->start(),		//start/end of the interval
+															 face->vertex_angle(edge->v1()),	//corner angle
+															 next_edge->length(),		//length of the new edge
+															 last_interval,		//if it is the first interval on the edge
+															 first_interval,
+															 turn_right,
+															 turn_left,
+															 candidates);		//if it is the last interval on the edge
+
+				if(num_propagated)
+				{
+					bool const invert = next_edge->v0()->id() != edge->v1()->id();		//if the origins coinside, do not invert intervals
+
+					construct_propagated_intervals(invert,		//do not inverse 
+												 next_edge, 
+												 face,
+												 candidates,
+												 num_propagated,
+												 min_interval);
+
+					update_list_and_queue_GB(interval_list(next_edge), 
+									      candidates, 
+										  num_propagated,
+                                          pstop);
+				}
+			}
+		} 
+	} 
+
+	m_propagation_distance_stopped = m_queue.empty() ? GEODESIC_INF : (*m_queue.begin())->min();
+	clock_t stop = clock();
+	m_time_consumed = (static_cast<double>(stop)-static_cast<double>(start))/CLOCKS_PER_SEC;
+
+/*	for(unsigned i=0; i<m_edge_interval_lists.size(); ++i)
+	{
+		list_pointer list = &m_edge_interval_lists[i];
+		interval_pointer p = list->first();
+		assert(p->start() == 0.0);
+		while(p->next())
+		{
+			assert(p->stop() == p->next()->start());
+			assert(p->d() < GEODESIC_INF);
+			p = p->next();
+		}
+	}*/
+}
 inline void GeodesicAlgorithmExact::propagate(std::vector<SurfacePoint>& sources,
    									   double max_propagation_distance,			//propagation algorithm stops after reaching the certain distance from the source
 									   std::vector<SurfacePoint>* stop_points,
@@ -926,6 +1082,234 @@ inline bool GeodesicAlgorithmExact::check_stop_conditions(unsigned& index, int k
 }
 
 
+inline void GeodesicAlgorithmExact::update_list_and_queue_GB(list_pointer list,
+												IntervalWithStop* candidates,	//up to two candidates
+												unsigned num_candidates,
+                                                SurfacePoint pstop)
+{
+	assert(num_candidates <= 2);
+	//assert(list->first() != NULL);
+	edge_pointer edge = list->edge();
+	double const local_epsilon = SMALLEST_INTERVAL_RATIO * edge->length(); 
+    double dist = std::max(std::min(pstop.distance(edge->v0())-edge->length(), pstop.distance(edge->v1())-edge->length()), 0.0 );
+	if(list->first() == NULL) 
+	{
+		interval_pointer* p = &list->first();
+		IntervalWithStop* first;
+		IntervalWithStop* second; 
+
+		if(num_candidates == 1)
+		{
+			first = candidates;
+			second = candidates;
+			first->compute_min_distance_GB(first->stop(),dist);
+		}
+		else 
+		{	
+			if(candidates->start() <= (candidates+1)->start())
+			{
+				first = candidates;
+				second = candidates+1;
+			}
+			else 
+			{
+				first = candidates+1;
+				second = candidates;
+			}
+			//assert(first->stop() == second->start());
+
+			first->compute_min_distance_GB(first->stop(), dist);
+			second->compute_min_distance_GB(second->stop(), dist);
+		}
+
+		if(first->start() > 0.0)
+		{
+			*p = m_memory_allocator.allocate();
+			(*p)->initialize(edge);
+			p = &(*p)->next();
+		}
+
+		*p = m_memory_allocator.allocate();
+		memcpy(*p,first,sizeof(Interval));
+		m_queue.insert(*p);
+
+		if(num_candidates == 2)
+		{
+			p = &(*p)->next();
+			*p = m_memory_allocator.allocate();
+			memcpy(*p,second,sizeof(Interval));
+			m_queue.insert(*p);
+		}
+
+		if(second->stop() < edge->length())
+		{
+			p = &(*p)->next();
+			*p = m_memory_allocator.allocate();
+			(*p)->initialize(edge);
+			(*p)->start() = second->stop();
+		}
+		else
+		{
+			(*p)->next() = NULL;
+		}
+		return;
+	}
+
+	bool propagate_flag;
+
+	for(unsigned i=0; i<num_candidates; ++i)				//for all new intervals
+	{
+		IntervalWithStop* q = &candidates[i];
+	
+		interval_pointer previous = NULL;
+
+		interval_pointer p = list->first();
+		assert(p->start() == 0.0);
+
+		while(p != NULL && p->stop() - local_epsilon < q->start())
+		{
+			p = p->next(); 
+		}
+
+		while(p != NULL && p->start() < q->stop() - local_epsilon)			//go through all old intervals
+		{
+			unsigned const N = intersect_intervals(p, q);								//interset two intervals
+
+			if(N == 1)			
+			{
+				if(map[0]==OLD)	//if "p" is always better, we do not need to update anything)
+				{
+					if(previous)		//close previous interval and put in into the queue
+					{
+						previous->next() = p;
+						previous->compute_min_distance_GB(p->start(), dist);
+						m_queue.insert(previous);
+						previous = NULL;
+					}
+
+					p = p->next(); 
+					
+				}
+				else if(previous)	//extend previous interval to cover everything; remove p
+				{
+					previous->next() = p->next(); 
+					erase_from_queue(p);
+					m_memory_allocator.deallocate(p);
+
+					p = previous->next();
+				}
+				else				//p becomes "previous"
+				{
+					previous = p;
+					interval_pointer next = p->next();
+					erase_from_queue(p);
+
+					memcpy(previous,q,sizeof(Interval));
+
+					previous->start() = start[0];
+					previous->next() = next;
+
+					p = next; 
+				}
+				continue;
+			}
+
+			//update_flag = true;
+
+			Interval swap(*p);							//used for swapping information
+			propagate_flag = erase_from_queue(p);
+
+			for(unsigned j=1; j<N; ++j)				//no memory is needed for the first one
+			{
+				i_new[j] = m_memory_allocator.allocate();	//create new intervals
+			}
+
+			if(map[0]==OLD)	//finish previous, if any
+			{
+				if(previous)
+				{
+					previous->next() = p;
+					previous->compute_min_distance_GB(previous->stop(), dist);
+					m_queue.insert(previous);
+					previous = NULL;
+				}
+				i_new[0] = p;
+				p->next() = i_new[1];
+				p->start() = start[0];
+			}
+			else if(previous)	//extend previous interval to cover everything; remove p
+			{
+				i_new[0] = previous;
+				previous->next() = i_new[1]; 
+				m_memory_allocator.deallocate(p);
+				previous = NULL;
+			}
+			else				//p becomes "previous"
+			{
+				i_new[0] = p;
+				memcpy(p,q,sizeof(Interval));
+
+				p->next() = i_new[1];
+				p->start() = start[0];
+			}
+
+			assert(!previous);
+
+			for(unsigned j=1; j<N; ++j)					
+			{
+				interval_pointer current_interval = i_new[j];
+
+				if(map[j] == OLD)	
+				{
+					memcpy(current_interval,&swap,sizeof(Interval));
+				}
+				else
+				{
+					memcpy(current_interval,q,sizeof(Interval));
+				}
+				
+				if(j == N-1)	
+				{
+					current_interval->next() = swap.next();
+				}
+				else			
+				{
+					current_interval->next() = i_new[j+1];
+				}
+
+				current_interval->start() = start[j];
+			}
+
+			for(unsigned j=0; j<N; ++j)								//find "min" and add the intervals to the queue
+			{
+				if(j==N-1 && map[j]==NEW)
+				{
+					previous = i_new[j];
+				}
+				else
+				{
+					interval_pointer current_interval = i_new[j];
+
+					current_interval->compute_min_distance_GB(current_interval->stop(), dist);					//compute minimal distance
+
+					if(map[j]==NEW || (map[j]==OLD && propagate_flag))
+					{
+						m_queue.insert(current_interval);
+					}
+				}
+			}
+
+			p = swap.next();
+		}
+
+		if(previous)		//close previous interval and put in into the queue
+		{
+			previous->compute_min_distance_GB(previous->stop(), dist);
+			m_queue.insert(previous);
+			previous = NULL;
+		}
+	}
+}
 inline void GeodesicAlgorithmExact::update_list_and_queue(list_pointer list,
 												IntervalWithStop* candidates,	//up to two candidates
 												unsigned num_candidates)

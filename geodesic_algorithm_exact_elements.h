@@ -69,6 +69,30 @@ public:
 		}
 	}
 
+	void compute_min_distance_GB(double stop, double dist)			//compute min, given c,d theta, start, end.
+	{
+		//assert(stop > m_start);
+
+		if(m_d == GEODESIC_INF)
+		{
+			m_min = GEODESIC_INF;
+		}
+		else if(m_start > m_pseudo_x)
+		{
+			m_min = signal(m_start);
+		}
+		else if(stop < m_pseudo_x)
+		{
+			m_min = signal(stop);
+		}
+		else
+		{
+			assert(m_pseudo_y<=0);
+			m_min = m_d - m_pseudo_y;
+		}
+       m_min+=dist; 
+      // m_min+=dist-std::abs(start()-end()); 
+	}
 	void compute_min_distance(double stop)			//compute min, given c,d theta, start, end.
 	{
 		//assert(stop > m_start);

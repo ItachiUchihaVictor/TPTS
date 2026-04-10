@@ -84,7 +84,7 @@ void BuildGeoTree(GeoNode &n, int POI, stx::btree<int, GeoNode*> &bplustree, geo
     while(bplusparenttree.size()!=POI){
         remainedPOI=bplustree.size();
         if(remainedPOI==0)break;
-        std::cout<<"depth: "<<depth<<" ParentList size: "<<bplusparenttree.size()<<" remianed POI: "<<remainedPOI<<std::endl;
+    //    std::cout<<"depth: "<<depth<<" ParentList size: "<<bplusparenttree.size()<<" remianed POI: "<<remainedPOI<<std::endl;
         BuildLevel(depth, bplustree, algorithm);
         depth++;
     }
